@@ -63,7 +63,7 @@ class MyApp extends StatelessWidget {
             showUnselectedLabels: true,
             type: BottomNavigationBarType.fixed,
           ),
-          cardTheme: CardTheme( // 统一卡片样式
+          cardTheme: CardThemeData( // 统一卡片样式
             elevation: 2, // 调整卡片阴影
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12.0), // 增加圆角
