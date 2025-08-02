@@ -1,0 +1,157 @@
+name: Build and Release (Windows EXE + Android split APK)
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-build:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter Doctor
+        run: flutter doctor -v
+
+      - name: Restore pub dependencies
+        run: flutter pub get
+
+      - name: Enable Windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Build Windows
+        run: flutter build windows --release
+
+      - name: Determine version from tag
+        id: get_version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          # strip leading 'v'
+          if ($tag.StartsWith("v")) { $tag = $tag.Substring(1) }
+          echo "version=$tag" >> $env:GITHUB_OUTPUT
+
+      - name: Package Windows artifacts (zip)
+        shell: pwsh
+        run: |
+          $version = "${{ steps.get_version.outputs.version }}"
+          $outDir = "build\windows\x64\runner\Release"
+          if (!(Test-Path $outDir)) {
+            Write-Error "Windows build output not found at $outDir"
+          }
+          $zipName = "mood_and_sun_journal-windows-x64-$version.zip"
+          Compress-Archive -Path "$outDir\*" -DestinationPath $zipName -Force
+          echo "zip=$zipName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload artifact (Windows zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: |
+            *.zip
+
+  android-build:
+    name: Build Android split APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter Doctor
+        run: flutter doctor -v
+
+      - name: Restore pub dependencies
+        run: flutter pub get
+
+      - name: Build Android APK (split per ABI)
+        run: flutter build apk --release --split-per-abi
+
+      - name: Determine version from tag
+        id: get_version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Rename APKs with version
+        run: |
+          version="${{ steps.get_version.outputs.version }}"
+          outdir="build/app/outputs/flutter-apk"
+          ls -la "$outdir"
+          # Map produced names to friendly names
+          if [ -f "$outdir/app-armeabi-v7a-release.apk" ]; then
+            mv "$outdir/app-armeabi-v7a-release.apk" "mood_and_sun_journal-android-armeabi-v7a-${version}.apk"
+          fi
+          if [ -f "$outdir/app-arm64-v8a-release.apk" ]; then
+            mv "$outdir/app-arm64-v8a-release.apk" "mood_and_sun_journal-android-arm64-v8a-${version}.apk"
+          fi
+          if [ -f "$outdir/app-x86_64-release.apk" ]; then
+            mv "$outdir/app-x86_64-release.apk" "mood_and_sun_journal-android-x86_64-${version}.apk"
+          fi
+
+      - name: Upload artifact (APK files)
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apks
+          path: |
+            *.apk
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - windows-build
+      - android-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+          path: dist
+
+      - name: Download Android artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apks
+          path: dist
+
+      - name: List files
+        run: ls -la dist
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
